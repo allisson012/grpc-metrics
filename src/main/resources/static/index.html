@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RPC vs gRPC — Monitor de Métricas</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #f5f5f5; color: #1a1a1a; }
+
+    header {
+      background: #1a1a1a; color: white;
+      padding: 16px 24px;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    header h1 { font-size: 16px; font-weight: 500; }
+    .header-info { display: flex; gap: 16px; align-items: center; }
+    .uptime { font-size: 12px; color: #888; }
+
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px; }
+
+    .panel { background: white; border-radius: 10px; border: 1px solid #e5e5e5; overflow: hidden; }
+    .panel-header {
+      padding: 12px 16px; border-bottom: 1px solid #e5e5e5;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .panel-title { font-size: 14px; font-weight: 500; }
+    .panel-sub { font-size: 11px; color: #888; margin-top: 2px; }
+
+    .badge { font-size: 11px; padding: 3px 10px; border-radius: 99px; display: flex; align-items: center; gap: 5px; }
+    .badge-rpc  { background: #fff8e6; color: #92600a; }
+    .badge-grpc { background: #e6f7f0; color: #0a6640; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; }
+    .dot-rpc  { background: #d4a017; animation: blink 2s infinite; }
+    .dot-grpc { background: #1a9e5f; animation: pulse 1.2s infinite; }
+    @keyframes blink  { 0%,45%{opacity:1} 50%,95%{opacity:.2} 100%{opacity:1} }
+    @keyframes pulse  { 0%,100%{opacity:1} 50%{opacity:.4} }
+
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px 16px; }
+    .stat { background: #f8f8f8; border-radius: 8px; padding: 10px 12px; }
+    .stat-label { font-size: 11px; color: #888; margin-bottom: 3px; }
+    .stat-value { font-size: 22px; font-weight: 500; }
+    .stat-sub   { font-size: 10px; color: #aaa; margin-top: 2px; }
+
+    .bars { padding: 0 16px 12px; display: flex; flex-direction: column; gap: 8px; }
+    .bar-row { display: flex; align-items: center; gap: 8px; }
+    .bar-label { font-size: 11px; color: #888; width: 52px; flex-shrink: 0; }
+    .bar-track { flex: 1; height: 8px; background: #f0f0f0; border-radius: 4px; overflow: hidden; }
+    .bar-fill  { height: 100%; border-radius: 4px; transition: width .5s ease; }
+    .bar-pct   { font-size: 11px; font-weight: 500; width: 36px; text-align: right; flex-shrink: 0; }
+
+    .log-box { margin: 0 16px 12px; background: #f8f8f8; border-radius: 8px; padding: 8px 10px; }
+    .log-title { font-size: 11px; color: #888; margin-bottom: 5px; }
+    .log-entries { font-family: monospace; font-size: 10px; display: flex; flex-direction: column; gap: 2px; min-height: 70px; }
+    .log-time { color: #bbb; flex-shrink: 0; margin-right: 4px; }
+    .tag-rpc  { color: #d4a017; margin-right: 4px; }
+    .tag-grpc { color: #1a9e5f; margin-right: 4px; }
+    .log-msg  { color: #555; }
+
+    .compare {
+      margin: 0 16px 16px;
+      background: white; border: 1px solid #e5e5e5;
+      border-radius: 10px; padding: 16px;
+    }
+    .compare-title { font-size: 13px; font-weight: 500; margin-bottom: 12px; color: #444; }
+    .compare-grid  { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .cmp-item { text-align: center; padding: 10px; background: #f8f8f8; border-radius: 8px; }
+    .cmp-head { font-size: 10px; color: #888; margin-bottom: 8px; text-transform: uppercase; letter-spacing: .5px; }
+    .cmp-vals { display: flex; justify-content: center; gap: 20px; }
+    .cmp-rpc  { font-size: 16px; font-weight: 600; color: #d4a017; }
+    .cmp-grpc { font-size: 16px; font-weight: 600; color: #1a9e5f; }
+    .cmp-sub  { font-size: 10px; color: #bbb; margin-top: 2px; }
+
+    .status-bar {
+      padding: 6px 16px; font-size: 11px;
+      display: flex; gap: 16px; background: #f0f0f0;
+      border-bottom: 1px solid #e5e5e5;
+    }
+    .status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; }
+    .online      { background: #1a9e5f; }
+    .offline-dot { background: #e05252; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>RPC vs gRPC — Monitor de Métricas em Tempo Real</h1>
+    <div style="font-size:11px;color:#888;margin-top:3px;">
+      RPC clássico (Java RMI :8081) vs gRPC streaming (HTTP/2 :9090)
+    </div>
+  </div>
+  <div class="header-info">
+    <span class="uptime" id="uptime">iniciando...</span>
+  </div>
+</header>
+
+<div class="status-bar">
+  <span><span class="status-dot online" id="dot-rpc"></span>RPC :8081 — <span id="status-rpc">conectando...</span></span>
+  <span><span class="status-dot online" id="dot-grpc"></span>gRPC :8080 — <span id="status-grpc">conectando...</span></span>
+</div>
+
+<div class="grid">
+
+  <!-- PAINEL RPC -->
+  <div class="panel">
+    <div class="panel-header">
+      <div>
+        <div class="panel-title">RPC Clássico — Java RMI</div>
+        <div class="panel-sub">polling a cada 2s · porta 1099 · serialização Java</div>
+      </div>
+      <div class="badge badge-rpc"><div class="dot dot-rpc"></div>polling</div>
+    </div>
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-label">Total de chamadas</div>
+        <div class="stat-value" id="rpc-calls">0</div>
+        <div class="stat-sub">conexões abertas e fechadas</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Latência última chamada</div>
+        <div class="stat-value" id="rpc-lat">--</div>
+        <div class="stat-sub">cada poll = nova conexão TCP</div>
+      </div>
+    </div>
+    <div class="bars">
+      <div class="bar-row">
+        <div class="bar-label">CPU</div>
+        <div class="bar-track"><div class="bar-fill" id="rpc-cpu-bar" style="background:#d4a017;width:0%"></div></div>
+        <div class="bar-pct" id="rpc-cpu-pct">--%</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Memória</div>
+        <div class="bar-track"><div class="bar-fill" id="rpc-mem-bar" style="background:#e8b84b;width:0%"></div></div>
+        <div class="bar-pct" id="rpc-mem-pct">--%</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Disco</div>
+        <div class="bar-track"><div class="bar-fill" id="rpc-disk-bar" style="background:#f0cc7a;width:0%"></div></div>
+        <div class="bar-pct" id="rpc-disk-pct">--%</div>
+      </div>
+    </div>
+    <div class="log-box">
+      <div class="log-title">log de chamadas RMI</div>
+      <div class="log-entries" id="rpc-log"></div>
+    </div>
+  </div>
+
+  <!-- PAINEL gRPC -->
+  <div class="panel">
+    <div class="panel-header">
+      <div>
+        <div class="panel-title">gRPC — Server-side Streaming</div>
+        <div class="panel-sub">1 stream aberto · porta 9090 · serialização Protobuf</div>
+      </div>
+      <div class="badge badge-grpc"><div class="dot dot-grpc"></div>stream ativo</div>
+    </div>
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-label">Updates recebidos</div>
+        <div class="stat-value" id="grpc-updates">0</div>
+        <div class="stat-sub">sem novas requisições</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">Conexões abertas</div>
+        <div class="stat-value" id="grpc-conns">1</div>
+        <div class="stat-sub">desde o início</div>
+      </div>
+    </div>
+    <div class="bars">
+      <div class="bar-row">
+        <div class="bar-label">CPU</div>
+        <div class="bar-track"><div class="bar-fill" id="grpc-cpu-bar" style="background:#1a9e5f;width:0%"></div></div>
+        <div class="bar-pct" id="grpc-cpu-pct">--%</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Memória</div>
+        <div class="bar-track"><div class="bar-fill" id="grpc-mem-bar" style="background:#2ec47a;width:0%"></div></div>
+        <div class="bar-pct" id="grpc-mem-pct">--%</div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label">Disco</div>
+        <div class="bar-track"><div class="bar-fill" id="grpc-disk-bar" style="background:#5dd49a;width:0%"></div></div>
+        <div class="bar-pct" id="grpc-disk-pct">--%</div>
+      </div>
+    </div>
+    <div class="log-box">
+      <div class="log-title">log de eventos gRPC</div>
+      <div class="log-entries" id="grpc-log"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- COMPARATIVO -->
+<div class="compare">
+  <div class="compare-title">Comparativo em tempo real</div>
+  <div class="compare-grid">
+    <div class="cmp-item">
+      <div class="cmp-head">Chamadas de rede</div>
+      <div class="cmp-vals">
+        <div><div class="cmp-rpc" id="cmp-rpc-calls">0</div><div class="cmp-sub">RMI</div></div>
+        <div><div class="cmp-grpc">1</div><div class="cmp-sub">gRPC</div></div>
+      </div>
+    </div>
+    <div class="cmp-item">
+      <div class="cmp-head">Latência média</div>
+      <div class="cmp-vals">
+        <div><div class="cmp-rpc" id="cmp-rpc-lat">--</div><div class="cmp-sub">RMI</div></div>
+        <div><div class="cmp-grpc" id="cmp-grpc-lat">~2ms</div><div class="cmp-sub">gRPC</div></div>
+      </div>
+    </div>
+    <div class="cmp-item">
+      <div class="cmp-head">Modelo de conexão</div>
+      <div class="cmp-vals">
+        <div><div class="cmp-rpc" style="font-size:12px">nova/req</div><div class="cmp-sub">RMI</div></div>
+        <div><div class="cmp-grpc" style="font-size:12px">1 fixa</div><div class="cmp-sub">gRPC</div></div>
+      </div>
+    </div>
+    <div class="cmp-item">
+      <div class="cmp-head">Serialização</div>
+      <div class="cmp-vals">
+        <div><div class="cmp-rpc" style="font-size:12px">Java</div><div class="cmp-sub">RMI</div></div>
+        <div><div class="cmp-grpc" style="font-size:12px">Protobuf</div><div class="cmp-sub">gRPC</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const RPC_URL  = 'http://localhost:8081/api/rpc/metrics';
+  const GRPC_URL = 'http://localhost:8080/api/grpc/metrics';
+
+  let startTime = Date.now();
+  let rpcLatencies = [];
+
+  function now() { return new Date().toTimeString().slice(0, 8); }
+
+  function addLog(id, tag, msg, isGrpc) {
+    const el = document.getElementById(id);
+    const div = document.createElement('div');
+    div.innerHTML = `<span class="log-time">${now()}</span>`
+      + `<span class="${isGrpc ? 'tag-grpc' : 'tag-rpc'}">[${tag}]</span>`
+      + `<span class="log-msg">${msg}</span>`;
+    el.insertBefore(div, el.firstChild);
+    while (el.children.length > 6) el.removeChild(el.lastChild);
+  }
+
+  function setBar(barId, pctId, value) {
+    document.getElementById(barId).style.width = value + '%';
+    document.getElementById(pctId).textContent = Math.round(value) + '%';
+  }
+
+  function setStatus(system, online, msg) {
+    document.getElementById('status-' + system).textContent = msg;
+    const dot = document.getElementById('dot-' + system);
+    dot.className = 'status-dot ' + (online ? 'online' : 'offline-dot');
+  }
+
+  // Polling RPC — consome o projeto rpc-metrics em :8081
+  async function pollRpc() {
+    try {
+      const res  = await fetch(RPC_URL);
+      const data = await res.json();
+
+      if (data.status) {
+        setStatus('rpc', true, 'aguardando primeiro poll...');
+        return;
+      }
+
+      rpcLatencies.push(data.avgLatencyMs || 0);
+      const avg = Math.round(rpcLatencies.reduce((a, b) => a + b, 0) / rpcLatencies.length);
+
+      document.getElementById('rpc-calls').textContent     = data.rpcCallCount;
+      document.getElementById('rpc-lat').textContent       = (data.latencyMs || '--') + 'ms';
+      document.getElementById('cmp-rpc-calls').textContent = data.rpcCallCount;
+      document.getElementById('cmp-rpc-lat').textContent   = avg + 'ms';
+
+      setBar('rpc-cpu-bar',  'rpc-cpu-pct',  data.cpuUsage);
+      setBar('rpc-mem-bar',  'rpc-mem-pct',  data.memoryUsage);
+      setBar('rpc-disk-bar', 'rpc-disk-pct', data.diskUsage);
+
+      setStatus('rpc', true, `online · ${data.rpcCallCount} chamadas · ${data.avgLatencyMs}ms avg`);
+      addLog('rpc-log', 'POLL', `chamada #${data.rpcCallCount} → cpu=${Math.round(data.cpuUsage)}% · ${data.latencyMs}ms`, false);
+
+    } catch (e) {
+      setStatus('rpc', false, 'offline — suba o rpc-metrics na porta 8081');
+      addLog('rpc-log', 'ERR', 'rpc-metrics indisponível em :8081', false);
+    }
+  }
+
+  // Polling gRPC — consome o projeto grpc-metrics em :8080
+  async function pollGrpc() {
+    try {
+      const res  = await fetch(GRPC_URL);
+      const data = await res.json();
+
+      if (data.status) {
+        setStatus('grpc', true, 'aguardando stream...');
+        return;
+      }
+
+      document.getElementById('grpc-updates').textContent = data.streamUpdates;
+
+      setBar('grpc-cpu-bar',  'grpc-cpu-pct',  data.cpuUsage);
+      setBar('grpc-mem-bar',  'grpc-mem-pct',  data.memoryUsage);
+      setBar('grpc-disk-bar', 'grpc-disk-pct', data.diskUsage);
+
+      setStatus('grpc', true, `online · ${data.streamUpdates} updates · 1 conexão`);
+      addLog('grpc-log', 'PUSH', `stream #${data.streamUpdates} · cpu=${Math.round(data.cpuUsage)}%`, true);
+
+    } catch (e) {
+      setStatus('grpc', false, 'offline — suba o grpc-metrics na porta 8080');
+      addLog('grpc-log', 'ERR', 'grpc-metrics indisponível em :8080', true);
+    }
+  }
+
+  function updateUptime() {
+    const s = Math.floor((Date.now() - startTime) / 1000);
+    const m = Math.floor(s / 60);
+    document.getElementById('uptime').textContent =
+      m > 0 ? `${m}m ${s % 60}s ativos` : `${s}s ativos`;
+  }
+
+  // Logs iniciais
+  addLog('grpc-log', 'OPEN', 'stream aberto com servidor gRPC · HTTP/2', true);
+  addLog('rpc-log',  'INFO', 'iniciando polling RMI a cada 2s', false);
+
+  // RPC: polling a cada 2s
+  pollRpc();
+  setInterval(pollRpc, 2000);
+
+  // gRPC: atualiza tela a cada 1s
+  pollGrpc();
+  setInterval(pollGrpc, 1000);
+
+  setInterval(updateUptime, 1000);
+</script>
+</body>
+</html>

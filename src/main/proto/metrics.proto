@@ -1,0 +1,44 @@
+//O .proto é um contrato:
+//Definir estrutura dos dados
+//Definir API do serviço
+//Gerar código automaticamente
+//Garantir que cliente e servidor estejam sincronizados
+
+// Define a versão do Protocol Buffers que estamos usando
+syntax = "proto3";
+
+option java_package = "com.example.grpc_metrics.proto";
+
+option java_outer_classname = "MetricsProto";
+
+option java_multiple_files = true;
+
+package metrics;
+
+// Mensagem de requisição enviada pelo cliente
+message MetricsRequest {
+  // Intervalo em segundos entre cada coleta de métricas
+  int32 interval_seconds = 1;
+}
+
+// Mensagem de resposta retornada pelo servidor
+message MetricsResponse {
+  double cpu_usage     = 1;
+
+  double memory_usage  = 2;
+
+  double disk_usage    = 3;
+
+  int64  timestamp     = 4;
+
+  string server_id     = 5;
+}
+
+service MetricsService {
+
+  rpc GetMetricsOnce (MetricsRequest) returns (MetricsResponse);
+
+  // Chamada com streaming de resposta
+  // O cliente faz uma requisição e o servidor envia várias respostas ao longo do tempo
+  rpc WatchMetrics (MetricsRequest) returns (stream MetricsResponse);
+}
